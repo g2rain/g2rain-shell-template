@@ -5,8 +5,9 @@
  */
 
 import type { Router } from 'vue-router'
+import { isDeepLinkLeavingGateway, setDeepLinkLeavingGateway } from '../../shared/deep-link-flags'
 import { getContextPath, getPathWithContextPath } from '../../shared/env'
-import { stripActiveRule } from '../../shared/url'
+import { setShellParam, stripActiveRule } from '../../shared/url'
 import { microAppInstanceId, microAppViewIdFromMenuKey } from '../../shared/qiankun-id'
 import { useAccessTokenStore } from '../../platform/stores/token.store'
 import { useMenuStore } from '../../platform/stores/menu.store'
@@ -24,7 +25,10 @@ export function getRedirectGatewayPrefix(): string {
 /** Vue Router path under history base */
 export const REDIRECT_GATEWAY_ROUTE_PREFIX = '/redirect'
 
-export const RETURN_URL_STORAGE_KEY = 'return_url'
+/** 按壳隔离的回跳地址 key：同域多个壳同时重新登录时互不覆盖 */
+export function returnUrlKey(): string {
+  return `return_url:${getContextPath()}`
+}
 
 let navigationRestored = false
 
@@ -131,7 +135,8 @@ export function parseRedirectGateway(fullPath: string): {
   contextPath: string
   internalPath: string
 } | null {
-  const { pathname, suffix } = splitPathAndSuffix(fullPath)
+  // g2shell 只用于选择宿主，不传给子应用
+  const { pathname, suffix } = splitPathAndSuffix(setShellParam(fullPath, null))
   const normalized = normalizePathname(pathname)
 
   let rest = ''
@@ -177,7 +182,7 @@ export function saveReturnUrl(fullPath?: string): void {
   }
 
   if (isRedirectGatewayPath(pathname)) {
-    localStorage.setItem(RETURN_URL_STORAGE_KEY, normalizeToBrowserGatewayPath(raw))
+    localStorage.setItem(returnUrlKey(), normalizeToBrowserGatewayPath(raw))
     return
   }
 
@@ -185,28 +190,31 @@ export function saveReturnUrl(fullPath?: string): void {
   const ctx = normalizePathname(getContextPath())
   if (ctx !== '/' && (pathname === ctx || pathname.startsWith(`${ctx}/`))) {
     if (!isRedirectGatewayPath(pathname)) {
-      // Stay within shell — no micro restore needed
+      // 壳内页面也需要在 SSO 后恢复；根页无需覆盖已有待恢复地址。
+      if (normalizePathname(pathname) !== ctx) {
+        localStorage.setItem(returnUrlKey(), raw)
+      }
       return
     }
   }
 
-  localStorage.setItem(RETURN_URL_STORAGE_KEY, buildRedirectGatewayFromTarget(raw))
+  localStorage.setItem(returnUrlKey(), buildRedirectGatewayFromTarget(raw))
 }
 
 export function peekReturnUrl(): string | null {
-  return localStorage.getItem(RETURN_URL_STORAGE_KEY)
+  return localStorage.getItem(returnUrlKey())
 }
 
 export function consumeReturnUrl(): string | null {
-  const value = localStorage.getItem(RETURN_URL_STORAGE_KEY)
+  const value = localStorage.getItem(returnUrlKey())
   if (value) {
-    localStorage.removeItem(RETURN_URL_STORAGE_KEY)
+    localStorage.removeItem(returnUrlKey())
   }
   return value
 }
 
 export function clearReturnUrl(): void {
-  localStorage.removeItem(RETURN_URL_STORAGE_KEY)
+  localStorage.removeItem(returnUrlKey())
 }
 
 export function resetNavigationRestoreState(): void {
@@ -289,10 +297,11 @@ export function findSubMenuItemByTargetPath(
   const longestRule = candidates.reduce((a, b) => (a.rule.length >= b.rule.length ? a : b)).rule
   const internalPath = stripActiveRule(longestRule, normalizedTarget)
 
-  const matching = candidates.filter((c) =>
+  const sameRule = candidates.filter((candidate) => candidate.rule === longestRule)
+  const matching = sameRule.filter((c) =>
     menuItemMatchesInternalPath(c.menuItem, internalPath),
   )
-  const pool = matching.length > 0 ? matching : candidates
+  const pool = matching.length > 0 ? matching : sameRule
 
   let bestItem = pool[0].menuItem
   let bestScore = scoreSubMenuItemForInternalPath(bestItem, pool[0].rule, internalPath)
@@ -409,18 +418,33 @@ function openShellTarget(fullPath: string): boolean {
 /**
  * Apply gateway or real micro path to Workspace Tab.
  */
-export function applyNavigationTarget(router: Router, fullPath: string): boolean {
+export function applyNavigationTarget(router: Router, target: string): boolean {
+  // g2shell 只用于选择宿主，不进入子应用的 initialRoute
+  const fullPath = setShellParam(target, null)
   if (isRedirectGatewayPath(fullPath)) {
+    if (isDeepLinkLeavingGateway()) return true
     const parsed = parseRedirectGateway(fullPath)
     if (!parsed) {
       return false
     }
-    const opened = openSubTarget(parsed.targetFullPath)
+    const leavingGateway = router.currentRoute.value.name === 'SubAppRedirectGateway'
+    if (leavingGateway) setDeepLinkLeavingGateway(true)
+    let opened: boolean
+    try {
+      opened = openSubTarget(parsed.targetFullPath)
+    } catch (error) {
+      if (leavingGateway) setDeepLinkLeavingGateway(false)
+      throw error
+    }
+    if (!opened && leavingGateway) setDeepLinkLeavingGateway(false)
     if (opened) {
       // Leave gateway bare page; keep Workspace address sync as source of truth.
-      if (router.currentRoute.value.name === 'SubAppRedirectGateway') {
+      if (leavingGateway) {
         void router.replace('/').then(() => {
+          setDeepLinkLeavingGateway(false)
           syncBrowserAddressForTab(useWorkspaceStore().activeTab)
+        }).catch(() => {
+          setDeepLinkLeavingGateway(false)
         })
       }
     }
