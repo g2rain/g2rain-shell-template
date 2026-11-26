@@ -160,7 +160,7 @@ CLI 不得通过文本替换把 `mode` 或 `protocolVersion` 注入核心源码�
 
 ## 8. 关联文档
 
-- 中央 [Main Shell 契约](https://github.com/g2rain/g2rain/blob/main/docs/architecture/profiles/frontend-shell/main-shell-contract.md)
-- 中央 [应用编码兼容方案](https://github.com/g2rain/g2rain/blob/main/docs/architecture/profiles/frontend-shell/application-code-compatibility.md)
+- 中央 [Main Shell 契约](https://github.com/g2rain/g2rain/blob/v1.0.2/docs/architecture/profiles/frontend-shell/main-shell-contract.md)
+- 中央 [应用编码兼容方案](https://github.com/g2rain/g2rain/blob/v1.0.2/docs/architecture/profiles/frontend-shell/application-code-compatibility.md)
 - [Platform Main 采纳说明](../development/platform-main-adoption.md)
 - `g2rain-app-cli`：`docs/development/command-interface.md`、`docs/development/template-contract.md`
